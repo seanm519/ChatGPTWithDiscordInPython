@@ -12,6 +12,8 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 intents = discord.Intents.default()
 intents.message_content = True  # Allow bot to read message content
+intents.guilds = True
+intents.members = True  # Enable the intent to read members
 
 bot = commands.Bot(command_prefix='/', intents=intents)
 
@@ -24,9 +26,14 @@ async def on_ready():
     except Exception as e:
         print(f'Error syncing commands: {e}')
 
-# Registering the /say command
+# Registering the /say command with channel-based access control
 @bot.tree.command(name="say")
 async def say(interaction: discord.Interaction, *, message: str):
+    # Check if the command is issued in the "GPT" channel
+    if interaction.channel.name != "gpt":
+        await interaction.response.send_message("Please use the gpt channel to interact with the bot.", ephemeral=True)
+        return
+
     # Defer the response to give more time for processing
     await interaction.response.defer()
 
