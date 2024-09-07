@@ -30,8 +30,8 @@ async def on_ready():
 @bot.tree.command(name="say")
 async def say(interaction: discord.Interaction, *, message: str):
     # Check if the command is issued in the "GPT" channel
-    if interaction.channel.name != "gpt":
-        await interaction.response.send_message("Please use the gpt channel to interact with the bot.", ephemeral=True)
+    if interaction.channel.name != "help":
+        await interaction.response.send_message("Please use the help channel to interact with the bot.", ephemeral=True)
         return
 
     # Defer the response to give more time for processing
