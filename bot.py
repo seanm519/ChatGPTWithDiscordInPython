@@ -29,7 +29,7 @@ async def on_ready():
 # Registering the /say command with channel-based access control
 @bot.tree.command(name="say")
 async def say(interaction: discord.Interaction, *, message: str):
-    # Check if the command is issued in the "GPT" channel
+    # Check if the command is issued in the "help" channel
     if interaction.channel.name != "help":
         await interaction.response.send_message("Please use the help channel to interact with the bot.", ephemeral=True)
         return
