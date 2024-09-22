@@ -35,7 +35,7 @@ async def send_dm(user: discord.User, message: str):
     except discord.Forbidden:
         print(f"Cannot send DM to {user.name}, they might have DMs disabled.")
 
-# Registering the /say command with channel-based access control and DM functionality
+# Registering the /say command with channel-based access control and enhanced response
 @bot.tree.command(name="say")
 async def say(interaction: discord.Interaction, *, message: str):
     # Check if the command is issued in the "help" channel
@@ -63,8 +63,8 @@ async def say(interaction: discord.Interaction, *, message: str):
         response_json = response.json()
         chat_gpt_message = response_json['choices'][0]['message']['content']
 
-        # Send the response back to Discord
-        await interaction.followup.send(chat_gpt_message)
+        # Send the user's question and bot's response back to the channel
+        await interaction.followup.send(f"{interaction.user.display_name} asked: {message}\n\nBot response: {chat_gpt_message}")
 
         # Optionally, send a DM to the user with the response
         await send_dm(interaction.user, f"Here is your response from ChatGPT: {chat_gpt_message}")
