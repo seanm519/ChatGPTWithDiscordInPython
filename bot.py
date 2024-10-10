@@ -2,7 +2,6 @@ import os
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-import requests
 import aiohttp
 import asyncio
 from collections import deque
@@ -14,20 +13,17 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 intents = discord.Intents.default()
 intents.message_content = True  # Allow bot to read message content
+intents.messages = True  # Allow bot to listen for messages
 
 bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Create a deque (double-ended queue) to store user questions
 question_queue = deque()
 
-@bot.event
-async def on_ready():
-    print(f'Bot is online as {bot.user}!')
+# Semaphore to limit the number of concurrent API requests
+semaphore = asyncio.Semaphore(3)  # Limit to 3 concurrent requests
 
-    # Semaphore to limit the number of concurrent API requests
-semaphore = asyncio.Semaphore(3)  # Limit to 3 concurrent requests (you can adjust this)
-
-# Function to make request to OpenAI
+# Function to make an asynchronous request to OpenAI
 async def ask_openai(question: str):
     async with semaphore:  # Only allow a limited number of concurrent requests
         try:
@@ -53,25 +49,43 @@ async def ask_openai(question: str):
 async def process_queue():
     while True:
         if question_queue:
-            question, interaction = question_queue.popleft()  # Get the oldest question from the queue
+            question, interaction, is_dm = question_queue.popleft()  # Get the oldest question from the queue
             gpt_response = await ask_openai(question)  # Send the question to ChatGPT
 
-            # Send the ChatGPT response as a new message to the channel
-            await interaction.channel.send(f"{interaction.user.display_name}'s ChatGPT response: {gpt_response}")
+            # Check if the question was from a DM or a text channel
+            if is_dm:
+                # Respond in DM
+                await interaction.send(f"Your ChatGPT response: {gpt_response}")
+            else:
+                # Respond in the text channel
+                await interaction.channel.send(f"{interaction.user.display_name}'s ChatGPT response: {gpt_response}")
         
-        await asyncio.sleep(1)  # Check the queue every 10 seconds
+        await asyncio.sleep(1)  # Check the queue every 15 seconds
 
-# /say command that adds a question to the queue
+# Handle direct messages without needing a command
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author == bot.user:
+        return  # Ignore messages from the bot itself
+
+    # Check if the message is in a DM
+    if message.guild is None:
+        # This is a DM, so process it directly
+        await message.channel.send("Processing your message...")
+
+        # Add the question to the queue (message content, the user object, and True to indicate DM)
+        question_queue.append((message.content, message.author, True))
+
+    await bot.process_commands(message)  # Ensure that other commands still work in guilds
+
+# /say command that adds a question to the queue from text channels
 @bot.tree.command(name="say")
 async def say(interaction: discord.Interaction, *, message: str):
-    user = interaction.user  # Get the user who invoked the command
-    channel = interaction.channel  # Get the channel where the command was invoked
-
     # Respond immediately with "Processing..." to complete the interaction
     await interaction.response.send_message("Processing...")
 
-    # Add the question and interaction object to the queue
-    question_queue.append((message, interaction))
+    # Add the question and interaction object to the queue (False to indicate it's from a text channel)
+    question_queue.append((message, interaction, False))
 
 # Start the background task when the bot is ready
 @bot.event
