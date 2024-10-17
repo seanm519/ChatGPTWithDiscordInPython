@@ -5,6 +5,9 @@ from dotenv import load_dotenv
 import aiohttp
 import asyncio
 from collections import deque
+from PIL import Image
+import pytesseract
+import io
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -60,7 +63,7 @@ async def process_queue():
                 # Respond in the text channel
                 await interaction.channel.send(f"{interaction.user.display_name}'s ChatGPT response: {gpt_response}")
         
-        await asyncio.sleep(1)  # Check the queue every 15 seconds
+        await asyncio.sleep(1)  # Check the queue every 1 second
 
 # Handle direct messages without needing a command
 @bot.event
@@ -87,10 +90,54 @@ async def say(interaction: discord.Interaction, *, message: str):
     # Add the question and interaction object to the queue (False to indicate it's from a text channel)
     question_queue.append((message, interaction, False))
 
+# /sayiac command that extracts text from an image in the "lecture" channel
+@bot.tree.command(name="sayiac")
+async def sayiac(interaction: discord.Interaction, *, message: str):
+    # Respond immediately with "Processing..." to end the interaction quickly
+    await interaction.response.send_message("Processing your image and question...")
+
+    # Process the image and question in the background
+    asyncio.create_task(process_image_and_question(interaction, message))
+
+# Background task to process the image and extract text
+async def process_image_and_question(interaction: discord.Interaction, user_question: str):
+    # Fetch the "lecture" channel by name
+    lecture_channel = discord.utils.get(interaction.guild.text_channels, name="lecture")
+    if not lecture_channel:
+        await interaction.channel.send("Lecture channel not found!")
+        return
+
+    # Fetch the most recent message with an image
+    image_message = None
+    async for msg in lecture_channel.history(limit=50):
+        if msg.attachments:
+            for attachment in msg.attachments:
+                if attachment.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    image_message = msg
+                    break
+        if image_message:
+            break
+
+    if not image_message:
+        await interaction.channel.send("No image found in the recent messages.")
+        return
+
+    # Download the image and extract text using pytesseract
+    image_data = await image_message.attachments[0].read()
+    image = Image.open(io.BytesIO(image_data))
+    extracted_text = pytesseract.image_to_string(image)
+
+    # Construct the prompt to send to ChatGPT
+    constructed_prompt = f'ImageAsText: "{extracted_text}". UserQuestion: "{user_question}".'
+
+    # Add the constructed prompt and interaction object to the queue
+    question_queue.append((constructed_prompt, interaction, False))
+
 # Start the background task when the bot is ready
 @bot.event
 async def on_ready():
     bot.loop.create_task(process_queue())  # Start the queue processor
+    await bot.tree.sync()  # Sync commands to ensure they're registered with Discord
     print(f'Bot is online as {bot.user}!')
 
 async def main():
