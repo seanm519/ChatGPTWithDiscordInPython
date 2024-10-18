@@ -58,28 +58,21 @@ async def process_queue():
             # Check if the question was from a DM or a text channel
             if is_dm:
                 # Respond in DM
-                await interaction.send(f"Your ChatGPT response: {gpt_response}")
+                await interaction.channel.send(f"Your ChatGPT response: {gpt_response}")
             else:
                 # Respond in the text channel
                 await interaction.channel.send(f"{interaction.user.display_name}'s ChatGPT response: {gpt_response}")
         
         await asyncio.sleep(1)  # Check the queue every 1 second
 
-# Handle direct messages without needing a command
+# Remove automatic DM processing
 @bot.event
 async def on_message(message: discord.Message):
     if message.author == bot.user:
         return  # Ignore messages from the bot itself
 
-    # Check if the message is in a DM
-    if message.guild is None:
-        # This is a DM, so process it directly
-        await message.channel.send("Processing your message...")
-
-        # Add the question to the queue (message content, the user object, and True to indicate DM)
-        question_queue.append((message.content, message.author, True))
-
-    await bot.process_commands(message)  # Ensure that other commands still work in guilds
+    # We no longer automatically respond to direct messages
+    await bot.process_commands(message)  # Process only commands
 
 # /say command that adds a question to the queue from text channels
 @bot.tree.command(name="say")
@@ -90,24 +83,57 @@ async def say(interaction: discord.Interaction, *, message: str):
     # Add the question and interaction object to the queue (False to indicate it's from a text channel)
     question_queue.append((message, interaction, False))
 
-# /sayiac command that extracts text from an image in the "lecture" channel
+# /sayiac command that extracts text from an image (from DMs or lecture channel)
 @bot.tree.command(name="sayiac")
 async def sayiac(interaction: discord.Interaction, *, message: str):
     # Respond immediately with "Processing..." to end the interaction quickly
     await interaction.response.send_message("Processing your image and question...")
 
-    # Process the image and question in the background
-    asyncio.create_task(process_image_and_question(interaction, message))
+    # Check if the command was sent in a DM or in a server text channel
+    if interaction.guild is None:
+        # The command was sent from a DM, so look for the most recent image in this DM
+        asyncio.create_task(process_image_from_dm(interaction, message))
+    else:
+        # The command was sent from a text channel, process image from "lecture" channel
+        asyncio.create_task(process_image_from_lecture(interaction, message))
 
-# Background task to process the image and extract text
-async def process_image_and_question(interaction: discord.Interaction, user_question: str):
+# Background task to process the image in the DM
+async def process_image_from_dm(interaction: discord.Interaction, user_question: str):
+    # Fetch the most recent message with an image in the DM
+    image_message = None
+    async for msg in interaction.channel.history(limit=50):
+        if msg.attachments:
+            for attachment in msg.attachments:
+                if attachment.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    image_message = msg
+                    break
+        if image_message:
+            break
+
+    if not image_message:
+        await interaction.channel.send("No image found in your recent direct messages. Please send an image and try again.")
+        return
+
+    # Download the image and extract text using pytesseract
+    image_data = await image_message.attachments[0].read()
+    image = Image.open(io.BytesIO(image_data))
+    extracted_text = pytesseract.image_to_string(image)
+
+    # Construct the prompt to send to ChatGPT
+    constructed_prompt = f'ImageAsText: "{extracted_text}". UserQuestion: "{user_question}".'
+
+    # Add the constructed prompt and interaction object to the queue
+    question_queue.append((constructed_prompt, interaction, True))
+
+# Background task to process the image in the "lecture" channel
+async def process_image_from_lecture(interaction: discord.Interaction, user_question: str):
     # Fetch the "lecture" channel by name
     lecture_channel = discord.utils.get(interaction.guild.text_channels, name="lecture")
     if not lecture_channel:
         await interaction.channel.send("Lecture channel not found!")
         return
 
-    # Fetch the most recent message with an image
+    # Fetch the most recent message with an image in the "lecture" channel
     image_message = None
     async for msg in lecture_channel.history(limit=50):
         if msg.attachments:
@@ -122,7 +148,7 @@ async def process_image_and_question(interaction: discord.Interaction, user_ques
         await interaction.channel.send("No image found in the recent messages.")
         return
 
-    # Download the image and extract text using pytesseract
+    # Download and process the image
     image_data = await image_message.attachments[0].read()
     image = Image.open(io.BytesIO(image_data))
     extracted_text = pytesseract.image_to_string(image)
