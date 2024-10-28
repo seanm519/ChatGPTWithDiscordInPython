@@ -81,8 +81,8 @@ async def on_message(message: discord.Message):
 # /say command that adds a question to the queue from text channels
 @bot.tree.command(name="say")
 async def say(interaction: discord.Interaction, *, message: str):
-    # Respond immediately with "Processing..." to complete the interaction
-    await interaction.response.send_message("Processing...")
+    # Respond immediately with "Processing..." to complete the interaction then delete message to clean text channel
+    await interaction.response.send_message("Processing...", delete_after=5)
 
     # Add the question and interaction object to the queue (False to indicate it's from a text channel)
     question_queue.append((message, interaction, False))
@@ -90,8 +90,8 @@ async def say(interaction: discord.Interaction, *, message: str):
 # /sayiac command that extracts text from an image (from DMs or lecture channel)
 @bot.tree.command(name="sayiac")
 async def sayiac(interaction: discord.Interaction, *, message: str):
-    # Respond immediately with "Processing..." to end the interaction quickly
-    await interaction.response.send_message("Processing your image and question...")
+    # Respond immediately with "Processing..." to end the interaction quickly then delete message to clean text channel
+    await interaction.response.send_message("Processing your image and question...", delete_after=5)
 
     # Check if the command was sent in a DM or in a server text channel
     if interaction.guild is None:
