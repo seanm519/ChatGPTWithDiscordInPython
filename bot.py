@@ -30,6 +30,10 @@ semaphore = asyncio.Semaphore(3)  # Limit to 3 concurrent requests
 async def ask_openai(question: str):
     async with semaphore:  # Only allow a limited number of concurrent requests
         try:
+            # Prepend the assistant prompt to every message
+            assistant_prompt = "You are a teaching assistant in a college class designed to answer student questions. Structure your responses in a way that students can learn from these answers, like providing examples or in-depth explanations."
+            full_prompt = f'{assistant_prompt}\n\nStudentQuestion: "{question}"'
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     'https://api.openai.com/v1/chat/completions',
@@ -39,7 +43,7 @@ async def ask_openai(question: str):
                     },
                     json={
                         'model': 'gpt-4',
-                        'messages': [{'role': 'user', 'content': question}]
+                        'messages': [{'role': 'user', 'content': full_prompt}]
                     }
                 ) as response:
                     response_json = await response.json()
