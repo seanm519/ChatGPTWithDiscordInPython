@@ -29,4 +29,7 @@ You will need:
             your new path should look like C:\Program Files\Tesseract-OCR
         you can now close out of all windows and control panel and restart your computer to let these changes take effect.
 
-
+Additionaly you will need to provide your own .env file for the discord bot token and chatGPT api key
+the variables are as follows:
+DISCORD_TOKEN=
+OPENAI_API_KEY=
