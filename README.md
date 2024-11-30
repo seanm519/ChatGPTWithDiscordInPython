@@ -33,3 +33,6 @@ Additionaly you will need to provide your own .env file for the discord bot toke
 the variables are as follows:
 DISCORD_TOKEN=
 OPENAI_API_KEY=
+
+When starting the program the bot will send a message introducing itself and explaining how to interact with it.
+    Some commands can only be accessed with a role called "Professor" these are commands that only the professor should have access to.
