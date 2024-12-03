@@ -6,17 +6,17 @@ import asyncio
 import aiohttp
 from io import BytesIO
 import pdfplumber  
-#import docx  
-from docx import Document
+import docx  
 from pptx import Presentation  
-import difflib
-from discord.ui import View, Button  # Importing View and Button
+from fuzzywuzzy import fuzz
 from collections import deque
 from PIL import Image
 import pytesseract
 import io
 from cachetools import TTLCache
 import pytesseract
+import atexit
+import json
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -66,6 +66,26 @@ async def create_admin_role(guild):
             print(f"Created '{ADMIN_ROLE_NAME}' role in '{guild.name}'.")
         except discord.Forbidden:
             print(f"Bot does not have permissions to create roles in '{guild.name}'.")
+
+
+def save_cache_to_file():
+    cache_file = "cache.txt"
+    
+    # Check if the file exists, create it if it doesn't
+    if not os.path.exists(cache_file):
+        with open(cache_file, 'w') as f:
+            json.dump({'lectures': {}, 'interactions': []}, f)
+
+    # Save the current cache state to the file
+    with open(cache_file, 'w') as f:
+        json.dump({
+            'lectures': lectures_cache,
+            'interactions': interactions_cache
+        }, f)
+    print("Cache saved to file successfully.")
+
+# Use `atexit` to ensure the cache is saved on shutdown
+atexit.register(save_cache_to_file)
 
 # Function to summarize text in manageable chunks
 async def summarize_text(text: str) -> str:
@@ -129,7 +149,7 @@ async def read_file_content(attachment: discord.Attachment) -> str:
         # Word Document Handling
         elif attachment.filename.endswith(".docx"):
             try:
-                doc = Document(file_like_object)
+                doc = docx.Document(file_like_object)
                 text = "\n".join([para.text for para in doc.paragraphs])
                 return text
             except Exception as e:
@@ -180,10 +200,11 @@ async def process_queue():
 
 
 def check_similar_questions(new_question: str) -> str:
-    threshold = 0.7
+    threshold = 60
 
     for entry in interactions_cache:
-        similarity = difflib.SequenceMatcher(None, entry['question'].lower(), new_question.lower()).ratio()
+        existing_question = entry['question']
+        similarity = fuzz.ratio(existing_question.lower(), new_question.lower())
         if similarity >= threshold:
             return entry['response']
     return None
@@ -214,8 +235,13 @@ async def ask_openai(question: str):
             return "There was an error contacting ChatGPT."
 
 @bot.tree.command(name="new_lecture")
-@commands.has_role(ADMIN_ROLE_NAME)  # Restrict to users with the "Professor" role
 async def store_lecture(interaction: discord.Interaction, attachment: discord.Attachment):
+    # Check for admin role and return if the user is not an admin
+    if not any(role.name == ADMIN_ROLE_NAME for role in interaction.user.roles):
+        await interaction.response.send_message("You do not have the required role to use this command.", ephemeral=True)
+        return  # Exit the command if the user lacks the role
+
+    # If the user has the admin role, proceed with processing
     await interaction.response.send_message("Processing your lecture document...")
 
     # Read the file content
@@ -235,9 +261,13 @@ async def store_lecture(interaction: discord.Interaction, attachment: discord.At
     else:
         await interaction.followup.send("Failed to process the document. Please upload a valid .pdf, .docx, or .pptx file.")
 
-
 @bot.tree.command(name="summary")
 async def summary(interaction: discord.Interaction, lecture_id: int):
+    # Check for admin role
+    if not any(role.name == ADMIN_ROLE_NAME for role in interaction.user.roles):
+        await interaction.response.send_message("You do not have the required role to use this command.", ephemeral=True)
+        return
+
     await interaction.response.defer()
 
     lecture = lectures_cache.get(lecture_id)
@@ -260,11 +290,13 @@ async def summary(interaction: discord.Interaction, lecture_id: int):
     else:
         await interaction.followup.send(f"No lecture found with ID: {lecture_id}")
 
-
-
 @bot.tree.command(name="cache")
-@commands.has_role(ADMIN_ROLE_NAME)  # Restrict to users with the "Professor" role
 async def cache(interaction: discord.Interaction):
+    # Check for admin role
+    if not any(role.name == ADMIN_ROLE_NAME for role in interaction.user.roles):
+        await interaction.response.send_message("You do not have the required role to use this command.", ephemeral=True)
+        return
+
     await interaction.response.defer()
 
     lecture_info = "\n".join([f"ID: {id} - Filename: {lecture['filename']} (Type: {lecture['filetype']})"
@@ -273,19 +305,20 @@ async def cache(interaction: discord.Interaction):
     interaction_info = "\n".join([f"User: <@{entry['user_id']}> - Question: {entry['question']} - Response: {entry['response'][:50]}..."
                                    for entry in interactions_cache]) if interactions_cache else "No interactions found."
 
-    response_message = "###  Lectures in Memory:\n" + lecture_info + "\n\n### Interactions in Memory:\n" + interaction_info
+    response_message = "### Lectures in Memory:\n" + lecture_info + "\n\n### Interactions in Memory:\n" + interaction_info
 
     await interaction.followup.send(response_message)
 
 @bot.tree.command(name="say")
 async def say(interaction: discord.Interaction, *, message: str):
-    await interaction.response.send_message("Processing...", delete_after=5)
-    
+    # Acknowledge the interaction by deferring the response
+    await interaction.response.defer()
+
     # Check for similar questions in the cache
     cached_answer = check_similar_questions(message)
     if cached_answer:
         print(f"Using cached answer for question: '{message}'")
-        await interaction.followup.send(f"Found a similar question in the cache: {cached_answer}")
+        await interaction.followup.send(f"Found a similar question in the cache: {cached_answer[:2000]}")
         return
     
     # Get the response from OpenAI
@@ -298,18 +331,74 @@ async def say(interaction: discord.Interaction, *, message: str):
         'response': response
     })
     
-    # Send response in chunks if necessary
+    # Send the response in chunks if necessary
     if len(response) > 2000:
         for i in range(0, len(response), 2000):
             chunk = response[i:i + 2000]
             await interaction.followup.send(chunk)
     else:
-        await interaction.followup.send(f"{interaction.user.display_name}'s ChatGPT response: {response[:2000]}")  # Ensure trimming for display
+        await interaction.followup.send(f"{interaction.user.display_name}'s ChatGPT response: {response}")
 
 
 
+@bot.tree.command(name="clear")
+async def clear_cache(interaction: discord.Interaction):
+    # Check for admin role
+    if not any(role.name == ADMIN_ROLE_NAME for role in interaction.user.roles):
+        await interaction.response.send_message(
+            "You do not have the required role to use this command.", ephemeral=True
+        )
+        return
+
+    # Clear the in-memory caches
+    lectures_cache.clear()
+    interactions_cache.clear()
+
+    # Clear the cache.txt file
+    try:
+        cache_file = "cache.txt"
+        if os.path.exists(cache_file):
+            with open(cache_file, 'w') as f:
+                json.dump({'lectures': {}, 'interactions': []}, f)
+            print("Cache file cleared successfully.")
+        else:
+            print("Cache file does not exist, so nothing to clear.")
+    except Exception as e:
+        await interaction.response.send_message(
+            f"Failed to clear the cache file due to an error: {e}", ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message("Cache and cache.txt file have been cleared successfully!")
 
 
+# Function to load cache from file
+def load_cache_from_file():
+    cache_file = "cache.txt"
+    
+    if os.path.exists(cache_file):
+        with open(cache_file, 'r') as f:
+            try:
+                cache_data = json.load(f)
+                
+                # Load lectures_cache with integer keys
+                global lectures_cache
+                lectures_cache = {
+                    int(id): lecture  # Ensure IDs are integers for lectures
+                    for id, lecture in cache_data.get('lectures', {}).items()
+                }
+                
+                # Load interactions_cache (if exists)
+                global interactions_cache
+                interactions_cache = cache_data.get('interactions', [])
+                
+                print("Cache loaded successfully.")
+                
+                
+            except json.JSONDecodeError:
+                print("Error decoding cache file. Starting with an empty cache.")
+    else:
+        print("Cache file not found. Starting with an empty cache.")
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -317,7 +406,7 @@ async def on_message(message: discord.Message):
         return
 
     if message.guild is None:
-        await message.channel.send("Processing your message...", delete_after=5)
+        await message.channel.send("Processing your message...")
         interactions_cache.append({'user_id': str(message.author.id), 'question': message.content})
         await question_queue.put((message.content, message, True))
 
@@ -325,6 +414,11 @@ async def on_message(message: discord.Message):
 
 @bot.tree.command(name="list")
 async def list_lectures(interaction: discord.Interaction):
+    # Check for admin role
+    if not any(role.name == ADMIN_ROLE_NAME for role in interaction.user.roles):
+        await interaction.response.send_message("You do not have the required role to use this command.", ephemeral=True)
+        return
+
     await interaction.response.defer()
 
     if lectures_cache:
@@ -332,9 +426,50 @@ async def list_lectures(interaction: discord.Interaction):
         await interaction.followup.send(f"### Stored Lectures:\n{lecture_list}")
     else:
         await interaction.followup.send("No lectures found in the memory.")
+        
+
+@bot.tree.command(name="questions")
+async def frequent_questions(interaction: discord.Interaction, top_n: int = 5):
+    # Check if the user has the required admin role
+    if not any(role.name == ADMIN_ROLE_NAME for role in interaction.user.roles):
+        await interaction.response.send_message(
+            "You do not have the required role to use this command.", ephemeral=True
+        )
+        return
+
+    # Check if the interactions_cache is empty
+    if not interactions_cache:
+        await interaction.response.send_message(
+            "No questions have been logged yet.", ephemeral=True
+        )
+        return
+
+    # Count the frequency of questions with normalization
+    question_counts = {}
+    for entry in interactions_cache:
+        question = entry.get('question')  # Safeguard in case 'question' is missing
+        if question:
+            normalized_question = question.strip().lower()  # Normalize question
+            question_counts[normalized_question] = question_counts.get(normalized_question, 0) + 1
+
+    # Sort questions by frequency in descending order
+    sorted_questions = sorted(question_counts.items(), key=lambda x: x[1], reverse=True)
+
+    # Prepare the response message
+    response_message = "**Most Frequently Asked Questions:**\n"
+    for i, (question, count) in enumerate(sorted_questions[:top_n], 1):
+        response_message += f"{i}. {question} (Asked {count} times)\n"
+
+    # Ensure the response doesn't exceed Discord's character limit (2000 characters)
+    if len(response_message) > 2000:
+        response_message = response_message[:1997] + "..."  # Truncate and add ellipsis
+
+    await interaction.response.send_message(response_message)
+
 
 @bot.event
 async def on_ready():
+    load_cache_from_file() 
     await bot.tree.sync()
     print(f'Bot is online as {bot.user}!')
 
